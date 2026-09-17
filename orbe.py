@@ -1,0 +1,62 @@
+"""El orbe flotante con tu agente de memoria detrás.
+
+    python orbe.py                   # hablar por micrófono
+    python orbe.py --texto           # escribir en la consola
+    python orbe.py --acceso-directo  # icono "Agente" en el escritorio
+
+El orbe, el oído y la voz se implementan en voz.py; aquí solo se le conecta el
+agente con memoria.
+"""
+
+import sys
+from pathlib import Path
+
+RAIZ = Path(__file__).resolve().parent
+CARPETA = RAIZ
+sys.path.insert(0, str(RAIZ))
+
+import voz  # noqa: E402
+from cerebro import Agente, MODELO_RESPALDO  # noqa: E402
+
+
+def main() -> None:
+    parser = voz.crear_parser("Habla con tu agente usando el orbe flotante.")
+    parser.add_argument("--memoria", default=None, help="Carpeta de notas del agente")
+    parser.add_argument("--nombre", default=None, help="Nombre del agente")
+    args = parser.parse_args()
+
+    voz.configurar_salida()
+
+    if args.acceso_directo:
+        ruta = voz.crear_acceso_directo(
+            script=CARPETA / "orbe.py",
+            nombre="Agente",
+            descripcion="Hablar con tu agente (orbe flotante)",
+            icono=RAIZ / "assets" / "orbe-agente.ico",
+            centro=(150, 255, 190),   # verde, para no confundirlo con el orbe azul
+            borde=(18, 120, 70),
+            tecla=args.tecla or "CTRL+ALT+A",
+        )
+        voz.log(f"{voz.AZUL}Acceso directo creado:{voz.RESET} {ruta}")
+        return
+
+    # El micrófono se resuelve igual que en el modo voz normal
+    micro_pedido = args.micro if args.micro is not None else voz.leer_config().get("micro")
+    indice_micro = voz.resolver_micro(micro_pedido)
+
+    if voz.atender_microfono(args, indice_micro):
+        return
+
+    agente = Agente(
+        modelo=args.modelo,
+        memoria=args.memoria,
+        nombre=args.nombre,
+        respaldo=None if args.no_fallback else MODELO_RESPALDO,
+        usar_color=False,
+    )
+
+    voz.arrancar(agente, args, indice_micro)
+
+
+if __name__ == "__main__":
+    main()

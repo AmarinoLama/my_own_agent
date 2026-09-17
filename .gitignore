@@ -1,0 +1,10 @@
+.env
+.freebuff/
+__pycache__/
+*.pyc
+*.log
+voz_config.json
+escritorios/
+memoria/*.md
+.venv/
+.venv-*/
