@@ -1,0 +1,17 @@
+Mascota de la ventana: thinking orb generado por el propio proyecto.
+
+Arte original creado por `python orbe_art.py` (orbe_art.py): esfera de cristal
+con núcleo luminoso, remolino interior, halo exterior, motas en órbita y un
+anillo que va meciéndose. No procede de ningún repositorio externo y no
+requiere licencia ajena; se regenera entero con ese comando.
+
+Estados (carpeta -> animación):
+  idle    en espera: respiración suave y motas tranquilas
+  escucha ondas que salen del centro
+  habla   núcleo latiendo con ondas rápidas
+  piensa  remolino girando y anillo de órbita meciéndose
+  error   parpadeo rojo con chispas
+  pausa   orbe apagado, casi dormido
+
+Cada carpeta conserva el número de cuadros de antes (00.png, 01.png, …) a
+125x95 con fondo transparente, para encajar en la ventana de 260x170.

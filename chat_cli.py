@@ -1,7 +1,8 @@
 """Chat por consola contra la API de ChatGPT (compatible con OpenAI).
 
 Usa la variable de entorno API_CHATGPT que está en el .env del proyecto.
-Modelo por defecto: mistralai/mistral-large-2512. Si tu key no tuviera permiso
+Endpoint: https://tokenharbor.ai/v1 (Authorization: Bearer thk_live_...).
+Modelo por defecto: deepseek-v4.1-flash:free. Si tu key no tuviera permiso
 para el modelo elegido (error 403, requiere plan de pago), el chat avisa y sigue
 con un modelo de respaldo gratuito para que puedas seguir hablando.
 
@@ -9,7 +10,7 @@ con un modelo de respaldo gratuito para que puedas seguir hablando.
     python chat_cli.py --once "¿Quién es Ibai?"         # una consulta + métricas
     python chat_cli.py --models                         # lista de modelos disponibles
     python chat_cli.py --bench                          # compara velocidad entre modelos
-    python chat_cli.py -m qwen/qwen3.7-plus:free        # elegir modelo
+    python chat_cli.py -m deepseek-v4.1-flash:free      # elegir modelo
 
 Comandos dentro del chat:
     /stats   -> resumen de rendimiento de la sesión
@@ -34,22 +35,17 @@ RAIZ = Path(__file__).resolve().parent
 load_dotenv(RAIZ / ".env")
 
 # Base URL y modelo por defecto (se pueden sobrescribir por .env o por argumentos)
-BASE_URL_DEFECTO = os.getenv("API_CHATGPT_BASE_URL", "https://api.xkiro.com/v1")
-MODELO_DEFECTO = os.getenv("API_CHATGPT_MODEL", "mistralai/mistral-large-2512")
+BASE_URL_DEFECTO = os.getenv("API_CHATGPT_BASE_URL", "https://tokenharbor.ai/v1")
+MODELO_DEFECTO = os.getenv("API_CHATGPT_MODEL", "deepseek-v4.1-flash:free")
 
 # Si el modelo elegido no está disponible (p. ej. requiere plan de pago), el chat
 # reintenta con este y, si tampoco existe, con los :free que liste la API en ese
 # momento (esos nombres rotan).
-MODELO_RESPALDO = os.getenv("API_CHATGPT_FALLBACK", "qwen/qwen3.7-plus:free")
+MODELO_RESPALDO = os.getenv("API_CHATGPT_FALLBACK", "deepseek-v4.1-flash:free")
 
 # Modelos que se comparan en --bench (cámbialos por los que quieras medir)
 MODELOS_BENCH = [
-    "deepseek/deepseek-v4.1-flash:free",
-    "minimax/minimax-m2.5:free",
-    "minimax/minimax-m2.5-highspeed:free",
-    "qwen/qwen3.7-plus:free",
-    "qwen/qwen3.8-max:free",
-    "mistralai/ministral-8b",
+    "deepseek-v4.1-flash:free",
 ]
 
 # Colores ANSI sencillos, se desactivan con --no-color
@@ -138,27 +134,49 @@ def texto_metrica(etiqueta: str, valor: str | None) -> str:
 def es_error_de_modelo(error: Exception) -> bool:
     """Detecta si el fallo es porque el modelo no está disponible con esta key."""
     mensaje = str(error).lower()
+    if "email_verification" in mensaje or "verify your email" in mensaje:
+        return False  # es un problema de la cuenta, no del modelo: no tiene sentido reintentar
     return any(clave in mensaje for clave in ("permission_denied", "not_found", "403", "404"))
 
 
 def error_legible(error: Exception) -> str:
     """Traduce los errores de la API a algo accionable."""
     mensaje = str(error)
+    bajo = mensaje.lower()
 
-    if "403" in mensaje or "permission" in mensaje.lower():
+    if "email_verification_required" in mensaje or "verify your email" in bajo:
+        return (
+            f"{mensaje}\n"
+            "  -> TokenHarbor pide verificar el correo antes de usar la API. "
+            "Entra en https://tokenharbor.ai/dashboard, confirma tu email y vuelve a intentarlo."
+        )
+    if "403" in mensaje or "permission" in bajo:
         return (
             f"{mensaje}\n"
             "  -> Ese modelo requiere plan de pago. Prueba uno gratuito con:\n"
             "     python chat_cli.py --models    (busca los que acaban en :free)"
         )
-    if "401" in mensaje or "invalid or disabled clientapikey" in mensaje.lower():
+    if "401" in mensaje or "invalid api key" in bajo or "unauthorized" in bajo:
         return (
             f"{mensaje}\n"
             "  -> La clave API_CHATGPT es inválida o está desactivada. "
-            "Genera una clave nueva en api.xkiro.com y reemplázala en el archivo .env."
+            "Genera una clave nueva en https://tokenharbor.ai/dashboard "
+            "(empieza por thk_live_) y reemplázala en el archivo .env."
         )
     if "Connection" in type(error).__name__:
         return f"{mensaje}\n  -> No se pudo conectar con {BASE_URL_DEFECTO}."
+    if "429" in mensaje or "rate_limit" in mensaje.lower() or "quota" in mensaje.lower():
+        return (
+            f"{mensaje}\n"
+            "  -> Cuota gratuita agotada por hoy: se restablece al reinicio diario. "
+            "Espera a mañana o usa una clave/plan con cuota propia en el .env."
+        )
+    if "server error" in mensaje.lower() or "500" in mensaje:
+        return (
+            f"{mensaje}\n"
+            "  -> El servidor de la API tuvo un fallo temporal. La acción local puede haberse "
+            "completado; vuelve a pedirla una vez más."
+        )
 
     return mensaje
 
@@ -180,7 +198,7 @@ class ChatCLI:
         if not api_key:
             raise SystemExit(
                 "Falta la variable API_CHATGPT. "
-                f"Añádela al archivo {RAIZ / '.env'} como:\n  API_CHATGPT=sk-..."
+                f"Añádela al archivo {RAIZ / '.env'} como:\n  API_CHATGPT=thk_live_..."
             )
 
         self.client = OpenAI(api_key=api_key, base_url=BASE_URL_DEFECTO)
@@ -430,7 +448,11 @@ class ChatCLI:
 def listar_modelos(usar_color: bool = True) -> None:
     """Lista los modelos que acepta la API, marcando los gratuitos."""
     chat = ChatCLI(usar_color=usar_color)
-    modelos = sorted(m.id for m in chat.client.models.list().data)
+    try:
+        modelos = sorted(m.id for m in chat.client.models.list().data)
+    except Exception as error:
+        print(color(f"No se pudo listar los modelos:\n{error_legible(error)}", ROJO, usar_color))
+        return
 
     print(color(f"{len(modelos)} modelos disponibles:", AZUL, usar_color))
     for modelo in modelos:

@@ -1,4 +1,4 @@
-"""El orbe flotante con tu agente de memoria detrás.
+"""La barra notch con tu agente de memoria detrás.
 
     python orbe.py                   # hablar por micrófono
     python orbe.py --texto           # escribir en la consola
@@ -16,11 +16,10 @@ CARPETA = RAIZ
 sys.path.insert(0, str(RAIZ))
 
 import voz  # noqa: E402
-from cerebro import Agente, MODELO_RESPALDO  # noqa: E402
 
 
 def main() -> None:
-    parser = voz.crear_parser("Habla con tu agente usando el orbe flotante.")
+    parser = voz.crear_parser("Habla con tu agente usando la barra de arriba.")
     parser.add_argument("--memoria", default=None, help="Carpeta de notas del agente")
     parser.add_argument("--nombre", default=None, help="Nombre del agente")
     args = parser.parse_args()
@@ -31,7 +30,7 @@ def main() -> None:
         ruta = voz.crear_acceso_directo(
             script=CARPETA / "orbe.py",
             nombre="Agente",
-            descripcion="Hablar con tu agente (orbe flotante)",
+            descripcion="Hablar con tu agente (orbe)",
             icono=RAIZ / "assets" / "orbe-agente.ico",
             centro=(150, 255, 190),   # verde, para no confundirlo con el orbe azul
             borde=(18, 120, 70),
@@ -44,18 +43,26 @@ def main() -> None:
     micro_pedido = args.micro if args.micro is not None else voz.leer_config().get("micro")
     indice_micro = voz.resolver_micro(micro_pedido)
 
+    if voz.atender_palmadas(args, indice_micro):
+        return
+
     if voz.atender_microfono(args, indice_micro):
         return
 
-    agente = Agente(
-        modelo=args.modelo,
-        memoria=args.memoria,
-        nombre=args.nombre,
-        respaldo=None if args.no_fallback else MODELO_RESPALDO,
-        usar_color=False,
-    )
+    def preparar_agente():
+        # El orbe ya debe estar visible antes de cargar memoria/configuración
+        # del agente: pythonw no tiene consola donde enseñar una excepción.
+        from cerebro import Agente
 
-    voz.arrancar(agente, args, indice_micro)
+        return Agente(
+            modelo=args.modelo,
+            memoria=args.memoria,
+            nombre=args.nombre,
+            respaldo=None if args.no_fallback else voz.MODELO_RESPALDO,
+            usar_color=False,
+        )
+
+    voz.arrancar(None, args, indice_micro, preparar_chat=preparar_agente)
 
 
 if __name__ == "__main__":

@@ -22,6 +22,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from calendario import Calendario, abrir_widget as abrir_widget_calendario
+
 RAIZ = Path(__file__).resolve().parent  # carpeta del proyecto
 CARPETA = RAIZ                         # alias de compatibilidad
 
@@ -59,9 +61,9 @@ def log(*partes) -> None:
     except OSError:
         pass
 
-BASE_URL_DEFECTO = os.getenv("API_CHATGPT_BASE_URL", "https://api.xkiro.com/v1")
-MODELO_DEFECTO = os.getenv("API_CHATGPT_MODEL", "mistralai/mistral-large-2512")
-MODELO_RESPALDO = os.getenv("API_CHATGPT_FALLBACK", "qwen/qwen3.7-plus:free")
+BASE_URL_DEFECTO = os.getenv("API_CHATGPT_BASE_URL", "https://tokenharbor.ai/v1")
+MODELO_DEFECTO = os.getenv("API_CHATGPT_MODEL", "deepseek-v4.1-flash:free")
+MODELO_RESPALDO = os.getenv("API_CHATGPT_FALLBACK", "deepseek-v4.1-flash:free")
 NOMBRE_DEFECTO = os.getenv("AGENTE_NOMBRE", "Agente")
 IDIOMA_DEFECTO = os.getenv("AGENTE_IDIOMA", "es-ES")
 MEMORIA_DEFECTO = Path(os.getenv("AGENTE_MEMORIA") or CARPETA / "memoria")
@@ -201,6 +203,60 @@ def _restaurar_escritorio(nombre: str) -> str:
             time.sleep(0.25)
 
     return f"escritorio «{datos.get('nombre', nombre)}» restaurado: {len(encontrados)}/{len(guardadas)} ventanas colocadas"
+
+
+def _intentar_reproducir_spotify(busqueda: str) -> str:
+    """Intenta manejar Spotify con coordenadas relativas, sin controlar el PC entero.
+
+    Es deliberadamente conservador: solo actúa si encuentra una ventana cuyo
+    proceso es spotify.exe y nunca afirma que la reproducción haya comenzado.
+    """
+    try:
+        import pyautogui
+    except ImportError:
+        return "Spotify está abierto, pero falta pyautogui; no pude intentar el clic."
+
+    ventana = None
+    limite = time.time() + 8
+    while time.time() < limite:
+        candidatas = [
+            item for item in _ventanas_visibles()
+            if os.path.basename(item.get("proceso", "")).lower() == "spotify.exe"
+        ]
+        if candidatas:
+            ventana = candidatas[0]
+            break
+        time.sleep(0.25)
+
+    if not ventana:
+        return "Abrí Spotify, pero no encontré su ventana para intentar la reproducción."
+
+    user32 = ctypes.windll.user32
+    hwnd = ventana["hwnd"]
+    user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+    user32.SetForegroundWindow(hwnd)
+    time.sleep(1.0)
+
+    x, y, ancho, alto = ventana["x"], ventana["y"], ventana["ancho"], ventana["alto"]
+    try:
+        # Spotify suele aceptar Ctrl+L para enfocar su búsqueda. El clic de
+        # respaldo cae en la zona superior de búsqueda de la ventana encontrada.
+        pyautogui.hotkey("ctrl", "l")
+        pyautogui.write(busqueda, interval=0.015)
+        pyautogui.press("enter")
+        time.sleep(2.0)
+        # La primera coincidencia suele estar en la zona de resultados; hacemos
+        # un único clic relativo, nunca coordenadas absolutas del escritorio.
+        pyautogui.click(x + max(260, min(ancho // 2, 520)), y + min(310, max(180, alto // 3)))
+        time.sleep(0.4)
+        pyautogui.press("enter")
+    except Exception as error:
+        return f"Abrí Spotify, pero no pude completar el control del ratón/teclado: {error}"
+
+    return (
+        f"Intenté abrir y reproducir «{busqueda}» en Spotify usando su ventana. "
+        "Comprueba el reproductor: no puedo confirmar desde Windows que la canción haya comenzado."
+    )
 
 
 # Cuando digan esto, tienen que quedar apuntado sí o sí
@@ -403,6 +459,18 @@ HERRAMIENTAS = [
     {
         "type": "function",
         "function": {
+            "name": "reproducir_en_spotify",
+            "description": "Abre Spotify, busca la canción y usa el teclado/ratón para intentar reproducir la primera coincidencia; solo informa de que se ha intentado, nunca garantices que suena",
+            "parameters": {
+                "type": "object",
+                "properties": {"busqueda": {"type": "string", "description": "canción y artista, por ejemplo En mi nuca Leli"}},
+                "required": ["busqueda"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "preparar_whatsapp",
             "description": "Prepara un WhatsApp y pide confirmación antes de abrir el enlace de envío; nunca lo manda sin confirmación",
             "parameters": {
@@ -447,6 +515,58 @@ HERRAMIENTAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "abrir_calendario",
+            "description": "Abre el widget flotante mensual del calendario para explorar las fechas con el ratón",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "consultar_calendario",
+            "description": "Consulta los eventos guardados en un intervalo inclusivo. Usa fechas exactas ISO AAAA-MM-DD; si la fecha solicitada es ambigua, pregunta antes de llamar",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "desde": {"type": "string", "description": "primer día incluido, AAAA-MM-DD"},
+                    "hasta": {"type": "string", "description": "último día incluido, AAAA-MM-DD"},
+                },
+                "required": ["desde", "hasta"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "anadir_evento_calendario",
+            "description": "Guarda un evento. Llama solo cuando el título y la fecha estén claros; no inventes fechas y deja hora vacía para eventos de todo el día",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "titulo": {"type": "string", "description": "nombre breve del evento"},
+                    "fecha": {"type": "string", "description": "fecha exacta AAAA-MM-DD"},
+                    "hora": {"type": "string", "description": "hora 24 h HH:MM o cadena vacía si es todo el día"},
+                    "descripcion": {"type": "string", "description": "detalles opcionales"},
+                },
+                "required": ["titulo", "fecha", "hora", "descripcion"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "eliminar_evento_calendario",
+            "description": "Elimina un evento por su identificador después de localizarlo; no borres eventos ambiguos",
+            "parameters": {
+                "type": "object",
+                "properties": {"id": {"type": "string", "description": "identificador del evento mostrado al consultarlo"}},
+                "required": ["id"],
+            },
+        },
+    },
 ]
 
 
@@ -475,7 +595,7 @@ class Agente:
         if not clave:
             raise SystemExit(
                 "Falta la clave API_CHATGPT. Está en el .env del proyecto o en "
-                f"{CARPETA / '.env'}:\n  API_CHATGPT=sk-..."
+                f"{CARPETA / '.env'}:\n  API_CHATGPT=thk_live_..."
             )
 
         self.client = OpenAI(api_key=clave, base_url=BASE_URL_DEFECTO)
@@ -487,6 +607,8 @@ class Agente:
         self.memoria_automatica = memoria_automatica
         self._memoria_auto_guardada = False
         self._accion_pendiente: dict | None = None
+        self._proceso_calendario = None
+        self._eventos_calendario_escritos = 0
 
         # Conversación de esta sesión (la memoria de verdad son las notas)
         self.historial: list[dict] = []
@@ -514,9 +636,22 @@ class Agente:
             "directo y sin relleno: respuestas cortas y útiles, sin repetir lo que te acaban de "
             "decir. Solo cambia de idioma si la persona te lo pide explícitamente.\n\n"
             "Puedes controlar algunas aplicaciones del PC con herramientas seguras: abrir "
-            "aplicaciones, buscar música en Spotify y preparar un WhatsApp. Nunca envías un "
+            "aplicaciones, buscar música en Spotify y preparar un WhatsApp. La herramienta de "
+            "Spotify abre la aplicación y puede intentar seleccionar la primera coincidencia con "
+            "teclado/ratón: no puedes afirmar que una canción está reproduciéndose porque no hay "
+            "confirmación del reproductor. Di siempre que lo has intentado y no inventes que suena. "
+            "Nunca envías un "
             "WhatsApp directamente: primero preparas el mensaje y pides confirmación; solo lo "
             "abres con el enlace prellenado después de que la persona diga claramente que sí. "
+            "También tienes un calendario local persistente. Si te dicen «muéstrame/abre el calendario», "
+            "llama a abrir_calendario: aparece un widget mensual flotante que la persona puede explorar "
+            "con el ratón. Para preguntas de agenda, consulta siempre consultar_calendario antes de "
+            "responder; las fechas de sus argumentos son ISO y los intervalos incluyen ambos extremos. "
+            "Interpreta fechas relativas desde la fecha actual indicada abajo, pregunta si hay ambigüedad "
+            "y no inventes eventos. Cuando te pidan apuntar una cita, guarda título y fecha exacta con "
+            "anadir_evento_calendario; hora es opcional y los eventos se guardan solo en este PC. "
+            "Para borrar, localiza primero el evento por fecha/título, usa su ID exacto y no borres si "
+            "hay más de una coincidencia: pide que te indiquen cuál.\n"
             "También puedes registrar y restaurar escritorios con nombres: registrar_escritorio "
             "guarda las ventanas visibles, aplicaciones, posiciones y tamaños; abrir_escritorio "
             "las reabre y recoloca. Si te piden registrar un escritorio, usa la herramienta "
@@ -532,12 +667,17 @@ class Agente:
             "Reglas de la memoria:\n"
             "- Guarda sin pedir permiso todo lo duradero que descubras: quién es, sus gustos, sus "
             "proyectos, sus decisiones y lo que aprendáis juntos.\n"
-            "- Cuando digan «recuerda», «apunta» o «no lo olvides», TIENES que llamar a "
-            "guardar_nota o anexar_nota en ese mismo turno.\n"
+            "- Cuando digan «recuerda», «apunta» o «no lo olvides», guarda en este turno: usa "
+            "el calendario para citas, eventos y fechas, y guardar_nota o anexar_nota para lo duradero.\n"
             "- Nunca digas que has apuntado algo si no lo has guardado de verdad: si no llamaste "
             "a la herramienta, no lo has apuntado. Es peor mentir que no guardar.\n"
             "- Añade con anexar_nota en vez de reescribir la nota entera cuando solo sumas algo.\n"
-            "- Deja las notas cortas y ordenadas: son para leerlas tú y la persona.\n\n"
+            "- Deja las notas cortas y ordenadas: son para leerlas tú y la persona.\n"
+            "- Las citas y fechas temporales van en el calendario, no las dupliques en las notas.\n\n"
+            f"Fecha y hora local actual: {time.strftime('%Y-%m-%d %H:%M')} "
+            f"(día de la semana: {('lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo')[time.localtime().tm_wday]}).\n"
+            "Si dicen día y mes sin año, usa la próxima fecha futura con ese día y mes y repite la fecha completa "
+            "al confirmar; si puede referirse a más de una fecha, pregunta antes de guardar o consultar.\n"
             f"{self.memoria.contexto()}"
         )
 
@@ -568,11 +708,10 @@ class Agente:
                 return self._abrir_aplicacion(argumentos.get("aplicacion", ""))
 
             if nombre == "buscar_en_spotify":
-                busqueda = str(argumentos.get("busqueda", "")).strip()
-                if not busqueda:
-                    return "(indica qué quieres buscar en Spotify)"
-                webbrowser.open("https://open.spotify.com/search/" + urllib.parse.quote(busqueda))
-                return f"búsqueda abierta en Spotify: {busqueda}"
+                return self._spotify(busqueda=argumentos.get("busqueda", ""), reproducir=False)
+
+            if nombre == "reproducir_en_spotify":
+                return self._spotify(busqueda=argumentos.get("busqueda", ""), reproducir=True)
 
             if nombre == "preparar_whatsapp":
                 return self._preparar_whatsapp(argumentos.get("telefono", ""), argumentos.get("mensaje", ""))
@@ -586,9 +725,70 @@ class Agente:
             if nombre == "abrir_escritorio":
                 return _restaurar_escritorio(argumentos.get("nombre", ""))
 
+            if nombre == "abrir_calendario":
+                if self._proceso_calendario is not None and self._proceso_calendario.poll() is None:
+                    return "El widget mensual del calendario ya está abierto."
+                self._proceso_calendario = abrir_widget_calendario()
+                return "Widget mensual del calendario abierto; puedes explorar meses y días con el ratón."
+
+            if nombre == "consultar_calendario":
+                eventos = Calendario().consultar(argumentos.get("desde", ""), argumentos.get("hasta", ""))
+                if not eventos:
+                    return "No hay eventos guardados en ese intervalo."
+                lineas = []
+                for evento in eventos[:100]:
+                    hora = evento.get("hora") or "todo el día"
+                    detalle = f" — {evento['descripcion']}" if evento.get("descripcion") else ""
+                    lineas.append(
+                        f"{evento['fecha']} {hora}: {evento['titulo']}{detalle} [ID: {evento['id']}]"
+                    )
+                if len(eventos) > 100:
+                    lineas.append(f"(hay {len(eventos) - 100} eventos adicionales en el intervalo)")
+                return "Eventos del calendario: " + " | ".join(lineas)
+
+            if nombre == "anadir_evento_calendario":
+                evento = Calendario().anadir(
+                    argumentos.get("titulo", ""), argumentos.get("fecha", ""),
+                    argumentos.get("hora", ""), argumentos.get("descripcion", ""),
+                )
+                self._eventos_calendario_escritos += 1
+                hora = f" a las {evento['hora']}" if evento["hora"] else " (todo el día)"
+                return f"Evento guardado: «{evento['titulo']}» el {evento['fecha']}{hora}. ID: {evento['id']}"
+
+            if nombre == "eliminar_evento_calendario":
+                evento = Calendario().eliminar(argumentos.get("id", ""))
+                if evento is None:
+                    return "No existe un evento con ese ID; no se ha borrado nada."
+                return f"Evento eliminado: «{evento['titulo']}» del {evento['fecha']} (ID {evento['id']})."
+
             return f"(herramienta desconocida: {nombre})"
         except Exception as error:
             return f"(no se pudo hacer: {type(error).__name__}: {error})"
+
+    def _spotify(self, busqueda: str, reproducir: bool = False) -> str:
+        """Busca Spotify y, si se pidió, intenta reproducir con control limitado de teclado/ratón."""
+        texto = str(busqueda).strip()
+        if not texto:
+            return "(indica qué quieres buscar o reproducir en Spotify)"
+        consulta = urllib.parse.quote(texto)
+        uri = "spotify:search:" + consulta
+        try:
+            if os.name == "nt":
+                os.startfile(uri)
+            else:
+                webbrowser.open(uri)
+
+            if not reproducir:
+                return f"búsqueda abierta en la aplicación Spotify de escritorio: {texto}"
+
+            resultado = _intentar_reproducir_spotify(texto)
+            return resultado
+        except OSError as error:
+            webbrowser.open("https://open.spotify.com/search/" + consulta)
+            return (
+                f"Spotify de escritorio no tiene registrado el protocolo ({error}); abrí la búsqueda web: {texto}. "
+                "No pude controlar la reproducción."
+            )
 
     def _abrir_aplicacion(self, aplicacion: str) -> str:
         """Abre solo destinos de una lista fija; nunca ejecuta texto como comando."""
@@ -719,6 +919,7 @@ class Agente:
 
         metricas = Metricas()
         escritos_antes = self.recuerdos_escritos
+        eventos_antes = self._eventos_calendario_escritos
         estado = {"inicio": time.perf_counter(), "ttft": None}
         mensajes = [{"role": "system", "content": self._prompt_sistema()}] + self.historial
         respuesta = ""
@@ -779,7 +980,16 @@ class Agente:
 
         # Red de seguridad: si pidió recordar algo y el modelo no lo guardó, lo
         # apuntamos tal cual lo dijo él. Sin inventar nada y sin perderlo.
-        if pide_recordar(texto) and self.recuerdos_escritos == escritos_antes:
+        if (
+            pide_recordar(texto)
+            and not re.search(
+                r"\b(calendario|cita|evento|hoy|mañana|pasado mañana|lunes|martes|miércoles|jueves|viernes|sábado|domingo|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b|\b\d{1,2}[/-]\d{1,2}\b|\bel\s+\d{1,2}\b",
+                texto,
+                re.IGNORECASE,
+            )
+            and self.recuerdos_escritos == escritos_antes
+            and self._eventos_calendario_escritos == eventos_antes
+        ):
             resultado = self.memoria.anexar("recuerdos-sueltos", f"- {texto}")
             self.recuerdos_escritos += 1
             log(f"{GRIS}  [memoria] anexar_nota -> {resultado} (tal cual lo dijiste){RESET}")
@@ -831,7 +1041,9 @@ class Agente:
                     "Eres el archivista de un agente personal. Trabajas siempre en español. "
                     "Revisa la conversación y guarda SOLO información duradera y útil que la "
                     "persona haya dicho explícitamente: preferencias, identidad, proyectos, "
-                    "decisiones, objetivos o lecciones de trabajo. No guardes saludos, preguntas "
+                    "decisiones, objetivos o lecciones de trabajo. No guardes citas, eventos ni "
+                    "fechas temporales del calendario en las notas: ya se guardan en el calendario. "
+                    "No guardes saludos, preguntas "
                     "sueltas, respuestas del agente, secretos, claves API ni datos temporales.\n\n"
                     "La memoria actual está incluida en el contexto. No dupliques datos que ya "
                     "estén escritos. Usa leer_nota o buscar_en_memoria si necesitas comprobarlo; "

@@ -1,7 +1,7 @@
 """Punto de entrada único del proyecto: chat por consola o modo voz.
 
     python main.py          # chat por consola
-    python main.py --voz    # hablar con el orbe flotante
+    python main.py --voz    # hablar con el orbe
     python main.py --help   # ayuda
 
 El resto de módulos vive en este mismo directorio.
