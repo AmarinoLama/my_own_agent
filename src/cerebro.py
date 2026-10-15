@@ -22,10 +22,15 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from calendario import Calendario, abrir_widget as abrir_widget_calendario
+# Los módulos viven en src/; la raíz guarda .env, memoria/ y calendario.json.
+SRC = Path(__file__).resolve().parent
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
-RAIZ = Path(__file__).resolve().parent  # carpeta del proyecto
-CARPETA = RAIZ                         # alias de compatibilidad
+from calendario import Calendario, abrir_widget as abrir_widget_calendario  # noqa: E402
+
+RAIZ = SRC.parent                       # carpeta del proyecto
+CARPETA = RAIZ                          # alias de compatibilidad
 
 # Cargamos la configuración desde el único directorio del proyecto.
 
@@ -132,6 +137,10 @@ def _ventanas_visibles() -> list[dict]:
 
 def _guardar_escritorio(nombre: str) -> str:
     """Guarda el estado actual de las ventanas en un JSON legible."""
+    if os.name != "nt":
+        # Sin la API de ventanas de Win32 no hay nada que guardar: mejor decirlo
+        # que grabar un JSON vacío que luego no restaura nada.
+        return "(guardar escritorios solo está disponible en Windows)"
     limpio = re.sub(r"[^\\w áéíóúüñ-]", "", str(nombre).strip().lower())
     limpio = re.sub(r"\\s+", "-", limpio).strip("-")[:60]
     if not limpio:

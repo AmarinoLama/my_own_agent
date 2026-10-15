@@ -4,12 +4,18 @@
     python main.py --voz    # hablar con el orbe
     python main.py --help   # ayuda
 
-El resto de módulos vive en este mismo directorio.
+Los módulos del agente viven en `src/`; este lanzador se limita a poner esa
+carpeta en el path para que los imports funcionen igual en Windows y en Ubuntu.
 """
 
 import sys
+from pathlib import Path
 
-from chat_cli import main as main_chat
+SRC = Path(__file__).resolve().parent / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from chat_cli import main as main_chat  # noqa: E402
 
 
 def lanzar() -> None:

@@ -192,7 +192,8 @@ class OrbeTransparenciaTests(unittest.TestCase):
             capturada["ppm"] = data
             return object()
 
-        with patch("voz.tk.PhotoImage", side_effect=foto_falsa):
+        # Se tapa la fábrica de fotos de Tk: el pintado se mide sin `python3-tk`.
+        with patch("voz._foto_ppm", side_effect=foto_falsa):
             orbe._pintar()
 
         _, ancho, alto, _, pixels = capturada["ppm"].split(b" ", 4)

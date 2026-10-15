@@ -30,8 +30,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 
-# Cargar el .env de la raíz del proyecto
-RAIZ = Path(__file__).resolve().parent
+# Cargar el .env de la raíz del proyecto (este módulo vive en src/)
+RAIZ = Path(__file__).resolve().parent.parent
 load_dotenv(RAIZ / ".env")
 
 # Base URL y modelo por defecto (se pueden sobrescribir por .env o por argumentos)

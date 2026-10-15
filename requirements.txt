@@ -1,0 +1,33 @@
+# Dependencias del agente (Windows y Ubuntu).
+# Instalación recomendada:  pip install -r requirements.txt
+
+# --- Chat por consola (lo mínimo para `python main.py`) ---------------------
+openai>=1.0
+python-dotenv>=1.0
+
+# --- Orbe, ventana del calendario y mascota ----------------------------------
+# En Ubuntu hace falta además el paquete del sistema:  sudo apt install python3-tk
+Pillow>=10.0
+numpy>=1.24
+
+# --- Voz: escucha ------------------------------------------------------------
+SpeechRecognition>=3.10
+PyAudio>=0.2.13
+# silero-vad instala torch por su cuenta (VAD principal de la escucha)
+silero-vad>=4.0
+# Respaldo del VAD si no hay torch:
+webrtcvad-wheels>=2.0.14
+
+# --- Voz: síntesis (Edge TTS, gratis y sin API key) --------------------------
+edge-tts>=6.1
+pygame>=2.5
+
+# --- Reconocimiento local opcional (más lento, sin Internet) -----------------
+# faster-whisper>=1.0
+
+# --- Control de ventanas/escritorio opcional (solo Windows) ------------------
+# pywin32>=306        # SAPI, accesos directos .lnk, WMI de palmadas
+# pyautogui>=0.9.54   # clics del PC (escritorios guardados y Spotify)
+
+# --- Tests -------------------------------------------------------------------
+# pytest>=8.0

@@ -14,51 +14,120 @@ un clic en la barra pausa y reanuda.
 | Pieza | Archivo o carpeta | Función |
 | --- | --- | --- |
 | Entrada principal | `main.py` | Abre el chat o el modo voz con `--voz` |
-| Cerebro | `cerebro.py` | Modelo, herramientas y memoria persistente |
-| Chat | `chat.py` | Conversación por consola con memoria |
-| Orbe | `orbe.py` | Entrada del agente con orbe y voz |
-| Voz | `voz.py` | Micrófono, selector, orbe y voz de Windows |
-| Cliente API | `chat_cli.py` | Cliente OpenAI-compatible y métricas |
+| Código | `src/` | Todos los módulos del agente |
+| Cerebro | `src/cerebro.py` | Modelo, herramientas y memoria persistente |
+| Chat | `src/chat.py` | Conversación por consola con memoria |
+| Cliente API | `src/chat_cli.py` | Cliente OpenAI-compatible y métricas |
+| Orbe | `src/orbe.py` | Entrada del agente con orbe y voz |
+| Voz | `src/voz.py` | Micrófono, selector, orbe y síntesis de voz |
+| Calendario | `src/calendario.py` | Eventos locales y widget mensual |
+| Arte | `src/orbe_art.py` | Iconos `.ico`/`.png` y mascota animada |
+| Pruebas | `tests/` | Pruebas unitarias: sin abrir ventanas ni usar micro |
+| Lanzadores | `scripts/` | `agente.sh`, `agente.bat` e instalador de Ubuntu |
 | Memoria | `memoria/*.md` | Notas editables que sobreviven entre sesiones |
-| Calendario | `calendario.py` | Eventos locales y widget mensual |
 | Recursos | `assets/` | Iconos y mascota del thinking orb |
+| Ajustes | `.env` | Clave y configuración (copia de `.env.example`) |
+
+Funciona igual en **Windows** y en **Ubuntu/Linux**: el sistema se detecta solo
+y cada uno usa sus piezas (`.lnk` + SAPI + WMI en Windows; `.desktop` +
+Edge TTS + `/proc` en Linux). Lo único exclusivo de Windows es `pywin32`, y
+está marcado como opcional en `requirements.txt`.
+
+## Instalación
+
+### Ubuntu / Linux
+
+```bash
+sudo apt install python3-venv            # si aún no lo tienes
+./scripts/instalar_ubuntu.sh             # apt + .venv + requirements.txt
+cp .env.example .env                     # y rellena API_CHATGPT
+./scripts/agente.sh                      # chat por consola
+```
+
+El instalador añade los paquetes del sistema que *pip* no puede poner:
+`python3-tk` (ventana del orbe y del calendario) y `portaudio19-dev`
+(micrófono). A mano sería lo mismo:
+
+```bash
+sudo apt install python3-tk portaudio19-dev
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Windows
+
+```bat
+py -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+copy .env.example .env
+scripts\agente.bat
+```
+
+Añade `pywin32` si quieres la voz SAPI, los `.lnk` con atajo de teclado y el
+vigilante de palmadas con WMI:
+
+```bat
+.venv\Scripts\pip install pywin32
+```
 
 ## Uso
 
+Los lanzadores aceptan los mismos argumentos que `main.py`:
+
 ```bash
-python main.py                         # chat por consola
-python main.py --voz                   # modo voz con orbe
-python chat.py                         # chat del agente con memoria
-python chat.py -o "¿qué sabes de mí?"
-python orbe.py                         # orbe del agente
-python orbe.py --texto                 # orbe escribiendo por consola
-python orbe.py --acceso-directo        # crea el icono Agente y Ctrl+Alt+A
-python orbe.py --instalar-palmadas     # doble palmada: abre Jarvis, también tras reiniciar
-python orbe.py --detener-palmadas      # detiene el vigilante activo
-python voz.py --nivel                  # comprueba el nivel del micrófono
-python voz.py --aprender-voz            # crea tu perfil local de hablante (12 s)
-python chat_cli.py --models            # lista modelos disponibles
-python orbe_art.py                     # regenera el arte: iconos .ico y mascota
+./scripts/agente.sh          # Ubuntu/Linux
+scripts\agente.bat           # Windows
+python main.py               # o directamente, en cualquier sistema
 ```
 
-El acceso directo **Agente** se crea con `Ctrl+Alt+A` y funciona desde cualquier
-ventana de Windows. Si quieres usar otra combinación:
+```bash
+python main.py --voz                        # modo voz con orbe
+python src/chat.py                          # chat del agente con memoria
+python src/chat.py -o "¿qué sabes de mí?"   # una sola pregunta
+python src/orbe.py                          # orbe del agente
+python src/orbe.py --texto                  # orbe escribiendo por consola
+python src/orbe.py --acceso-directo         # icono en el escritorio (.desktop / .lnk)
+python src/orbe.py --instalar-palmadas      # doble palmada: abre Jarvis al entrar
+python src/orbe.py --detener-palmadas       # detiene el vigilante activo
+python src/voz.py --nivel                   # comprueba el nivel del micrófono
+python src/voz.py --aprender-voz            # crea tu perfil local de hablante (12 s)
+python src/chat_cli.py --models             # lista modelos disponibles
+python src/orbe_art.py                      # regenera el arte: iconos y mascota
+```
+
+El acceso directo **Agente** se crea con `Ctrl+Alt+A` en Windows y funciona
+desde cualquier ventana. En Ubuntu/Linux se escribe `Agente.desktop` en el
+escritorio (busca en `Escritorio` o `Desktop` y respeta
+`~/.config/user-dirs.dirs`); los `.desktop` no pueden asignar atajos, así que
+el comando solo lo anota y hay que fijarlo en *Ajustes › Teclado › Atajos
+personalizados*. Para elegir otra combinación en Windows:
 
 ```bash
-python orbe.py --acceso-directo --tecla CTRL+ALT+Q
+python src/orbe.py --acceso-directo --tecla CTRL+ALT+Q
 ```
 
 Si ya tenías un acceso directo creado antes de reorganizar el proyecto, vuelve a
-ejecutar `python orbe.py --acceso-directo`: actualizará la ruta y la tecla rápida.
+ejecutar `python src/orbe.py --acceso-directo`: actualizará la ruta y la tecla.
 
 El icono se dibuja al crear el acceso directo: un thinking orb de cristal en
-varios tamaños (de 16 a 256 px), verde para **Agente** y azul para **Voz**.
-Windows guarda los iconos en caché; si no cambia a la primera, cierra sesión y
-vuelve a entrar o ejecuta `ie4uinit.exe -show`. El mismo orbe es la mascota de
-`assets/mascota/`, con una animación por estado; ambos se regeneran con
-`python orbe_art.py`.
+varios tamaños (de 16 a 256 px), verde para **Agente** y azul para **Voz**; se
+escribe como `.ico` (Windows) y también como `.png` (Linux). Windows guarda los
+iconos en caché; si no cambia a la primera, cierra sesión y vuelve a entrar o
+ejecuta `ie4uinit.exe -show`. En GNOME o KDE el `.png` se ve al instante. El mismo
+orbe es la mascota de `assets/mascota/`, con una animación por estado; todo se
+regenera con `python src/orbe_art.py`.
 
 
+## Pruebas
+
+```bash
+pip install pytest
+python -m pytest            # o: python -m unittest discover
+```
+
+Están en `tests/` y no abren ventanas ni usan el micrófono, así que corren igual
+en Windows y en Ubuntu. Las seis pruebas que se saltan («no existe todavía»)
+corresponden a funcionalidad pendiente, no a fallos.
 ## Calendario por voz
 
 En el modo voz puedes pedir «muéstrame el calendario»: se abre una ventana
@@ -90,7 +159,7 @@ La síntesis de Edge TTS es gratuita, no necesita API key y requiere conexión a
 Internet. Puedes cambiar el idioma del reconocimiento con `--idioma`, por ejemplo:
 
 ```bash
-python orbe.py --idioma es-ES --micro 2
+python src/orbe.py --idioma es-ES --micro 2
 ```
 
 ### Hacer más fiable la escucha
@@ -111,7 +180,7 @@ modelo ocurre al primer uso):
 
 ```bash
 pip install faster-whisper
-python orbe.py --transcripcion whisper --modelo-whisper small
+python src/orbe.py --transcripcion whisper --modelo-whisper small
 ```
 
 `base` usa menos recursos; `small` suele reconocer mejor a costa de más RAM y
@@ -119,16 +188,17 @@ CPU. Si dejas `--transcripcion auto` (por defecto), prueba Whisper local si est�
 instalado y vuelve a Google en español si falta o no carga. Para forzar Google:
 
 ```bash
-python orbe.py --transcripcion google
+python src/orbe.py --transcripcion google
 ```
 
 La opción `--silencio 0.65` determina cuánto silencio espera al final de cada
 frase. `--micro` permite elegir el dispositivo de entrada. Para activar Jarvis
 con dos palmadas aunque la ventana esté cerrada, ejecuta una vez
-`python orbe.py --instalar-palmadas`. Se crea un acceso directo en el inicio de
-sesión de Windows y el detector queda en segundo plano; usa
-`python orbe.py --desinstalar-palmadas` para quitarlo. También puedes arrancar el
-vigilante solo para la sesión con `python orbe.py --vigilar-palmadas`.
+`python src/orbe.py --instalar-palmadas`. Se deja en el inicio de sesión un
+acceso directo (`.lnk` en Windows, `.desktop` en `~/.config/autostart` en
+Ubuntu/Linux) y el detector queda en segundo plano; usa
+`python src/orbe.py --desinstalar-palmadas` para quitarlo. También puedes arrancar el
+vigilante solo para la sesión con `python src/orbe.py --vigilar-palmadas`.
 
 El detector mide localmente picos cortos de PCM y busca dos separados entre
 0.22 y 1.25 segundos: no usa IA, no transcribe, no guarda ni envía audio. El
@@ -145,7 +215,7 @@ en marcha no se hace una copia: se trae la ventana existente al frente.
 Si el micro que tengas elegido está mudo (cascos
 desconectados o apagados) el vigilante lo nota y se pasa al siguiente que capte
 algo, sin tocar tu elección para cuando vuelvas a conectarlos.
-`python orbe.py --detener-palmadas` apaga el vigilante de
+`python src/orbe.py --detener-palmadas` apaga el vigilante de
 esta sesión sin desinstalarlo.
 
 Para apagar Jarvis con la voz, di «ciérrate, Jarvis» (o «hasta luego,
@@ -154,7 +224,7 @@ abrirse solo: hasta que des dos palmadas. Lo mismo hace el menú del clic
 derecho > Salir.
 
 Si al conectar unos
-cascos cambia el micro predeterminado, prueba `python orbe.py --listar-micros`
+cascos cambia el micro predeterminado, prueba `python src/orbe.py --listar-micros`
 y elige una entrada diferente: el micrófono Bluetooth manos libres puede hacer
 que Windows cambie también el perfil de salida del casco.
 
@@ -176,10 +246,12 @@ EDGE_TTS_VOICE=es-ES-ElviraNeural
 También puedes elegir el motor directamente:
 
 ```bash
-python orbe.py --voz-motor edge
+python src/orbe.py --voz-motor edge
 ```
 
-Si Edge TTS no tiene conexión, el programa vuelve automáticamente a SAPI.
+Si Edge TTS no tiene conexión, el programa vuelve automáticamente a la voz de
+Windows (SAPI). En Ubuntu/Linux no hay SAPI: el orbe pasa al estado de error y
+el motivo queda en `voz.log`.
 
 ### Usar tu voz de Fish Audio
 
@@ -202,23 +274,26 @@ FISH_AUDIO_VOICE_ID=el_id_de_tu_voz
 Después inicia el orbe normalmente:
 
 ```bash
-python orbe.py
+python src/orbe.py
 # o, para probarlo sin cambiar el .env:
-python orbe.py --voz-motor fish
+python src/orbe.py --voz-motor fish
 ```
 
 También puedes pasar el identificador directamente:
 
 ```bash
-python orbe.py --voz-motor fish --voz-salida=EL_ID_DE_TU_VOZ
+python src/orbe.py --voz-motor fish --voz-salida=EL_ID_DE_TU_VOZ
 ```
 
 El reconocimiento de tu micrófono sigue usando Google en español (`es-ES`),
 y solo las respuestas del agente se generan en Fish Audio. Si Fish devuelve un
-error, se registra en la consola y en `voz.log` (el orbe solo cambia a estado de error); para volver a la voz local de Windows usa `VOZ_MOTOR=sapi` o `python orbe.py --voz-motor sapi`.
+error, se registra en la consola y en `voz.log` (el orbe solo cambia a estado
+de error); para volver a la voz local de Windows usa `VOZ_MOTOR=sapi` o
+`python src/orbe.py --voz-motor sapi`.
 
-La integración solicita audio WAV para reproducirlo directamente en Windows y
-no guarda el audio ni la clave en archivos adicionales.
+La integración pide audio WAV y lo reproduce sin guardarlo en disco: con
+`winsound` en Windows y con `pygame` en Ubuntu/Linux. Tampoco se guarda el audio
+ni la clave en ficheros adicionales.
 
 ## Control seguro del PC
 
@@ -254,6 +329,10 @@ intentado y no afirma que la canción esté sonando sin confirmación.
 
 ### Escritorios guardados
 
+> **Solo Windows.** Necesita la API de ventanas de Win32; en Ubuntu/Linux el
+> agente lo indica y no hace nada. El resto de herramientas del apartado sí
+> funcionan en ambos sistemas.
+
 Puedes registrar la disposición actual de tus ventanas con una orden como:
 
 ```text
@@ -281,7 +360,7 @@ Para que el agente distinga tu voz de música, vídeos u otras personas, crea un
 huella local una sola vez:
 
 ```bash
-python voz.py --aprender-voz --micro 2
+python src/voz.py --aprender-voz --micro 2
 ```
 
 Habla de forma natural durante unos 12 segundos y no pongas música durante la
@@ -291,7 +370,7 @@ modelo; si no coincide, se ignora. El modelo local se descarga la primera vez y
 la comparación se hace en tu PC. Para desactivarlo temporalmente:
 
 ```bash
-python orbe.py --sin-verificacion
+python src/orbe.py --sin-verificacion
 ```
 
 No es una garantía biométrica perfecta: ruido muy fuerte, una grabación de tu
@@ -306,7 +385,7 @@ de audio de 20 ms, se exige voz sostenida y se espera el silencio de fin de fras
 antes de interrumpir; golpes sueltos no deberían cortarlo. Puedes escoger
 `--transcripcion whisper` para hacerlo localmente o usar el modo `auto` que
 tiene Google como respaldo. Si quieres que además ignore otras voces, crea un
-perfil local con `python voz.py --aprender-voz --micro 2`.
+perfil local con `python src/voz.py --aprender-voz --micro 2`.
 
 En Windows, Edge TTS usa el reproductor MP3 nativo MCI para evitar fijar a la
 fuerza 48 kHz/estéreo en pygame. También se puede seleccionar el backend:
@@ -326,39 +405,6 @@ y lecciones. No guarda claves API ni conversaciones completas.
 Si dices “recuerda”, “apunta” o “anota”, el agente intenta guardarlo en el mismo
 turno; si no lo hace, se conserva literalmente en `memoria/recuerdos-sueltos.md`.
 `/reset` guarda lo aprendido antes de limpiar el historial de la conversación.
-
-## Cardpilot: optimizador de compras Cardmarket
-
-Cardpilot es una aplicación **Angular** con un pequeño servidor local Python.
-Agrupa wants del grupo y combina vendedores por precio, stock, trend y portes;
-maximiza las copias cubiertas y, a igual cobertura, la diferencia frente al
-trend. Reparte el envío entre las personas que efectivamente compran a cada
-tienda y muestra el pedido por vendedor/persona. Exporta un Excel con resumen,
-órdenes, reparto individual y cartas pendientes.
-
-Instala dependencias/build una vez y arranca:
-
-En Windows, basta con ejecutar **`cardmarket.bat`**. Instala las dependencias locales y compila Angular en el primer arranque; después abre `http://127.0.0.1:8765`. Deja la ventana abierta mientras uses Cardpilot. En otros sistemas, o para preparar el build manualmente:
-
-```bash
-npm install --prefix cardmarket-angular
-npm run build --prefix cardmarket-angular
-python cardmarket.py
-```
-
-Para otro puerto: `python cardmarket.py --port 8766` (la extensión incluida está configurada para 8765). Los datos manuales se conservan en localStorage de ese navegador. También se pueden guardar/importar JSON.
-
-### Importar una página abierta en Firefox
-
-1. En Cardpilot, abre **Ver opciones → Descargar extensión** o descomprime el ZIP incluido desde el botón.
-2. En Firefox entra en `about:debugging#/runtime/this-firefox` → **Cargar complemento temporal** y selecciona `manifest.json` de la carpeta descomprimida `cardmarket-extension/`.
-3. Inicia sesión en Cardmarket en la pestaña normal de Firefox y abre una lista de wants o una página con ofertas visibles.
-4. Pulsa el icono Cardpilot, identifica la persona de la lista, revisa la previsualización y pulsa **Importar**. La app local recibe solo las filas que se vieron en la vista.
-5. Revisa edición/idioma/condición, trend y envío antes de optimizar. Cardmarket calcula el porte final según destino y contenido del carrito; la extensión no lo inventa. Cuando varias personas quieran importar listas, repite el paso por persona.
-
-La extensión requiere un clic por importación: no vigila la cuenta ni rastrea navegación en segundo plano. El DOM de Cardmarket puede cambiar; si no se detectan filas, copia/importa datos manualmente. Importar una página con ofertas visibles es experimental: vendedor/precio pueden requerir revisión y no equivale a consultar toda la oferta del marketplace.
-
-**Límite real de integración:** Cardmarket indica que no está aceptando aplicaciones nuevas para su API. El aviso oficial dejó la API y el Shopping Wizard desactivados «hasta nuevo aviso». Por tanto no hay una vía autorizada para una sincronización server-to-server ni para obtener en tiempo real todas las ofertas de tus amigos; tampoco es apropiado sortear el login o raspar endpoints privados. Esta extensión es una importación visible, explícita y bajo tu control, no una garantía de acceso a toda la cuenta. No solicita ni guarda credenciales, cookies, mensajes o datos bancarios. No hace pedidos; siempre los confirmas tú.
 
 ## Configuración
 
@@ -383,8 +429,11 @@ La clave va en la cabecera `Authorization: Bearer` contra
 Instala las dependencias en tu entorno virtual:
 
 ```bash
-pip install openai python-dotenv pywin32 SpeechRecognition pyaudio edge-tts pygame pyautogui resemblyzer webrtcvad-wheels silero-vad
+pip install -r requirements.txt
 ```
+
+`pywin32` y `pyautogui` son opcionales y solo de Windows (SAPI, `.lnk`, WMI de
+palmadas, control de ventanas y clics de Spotify): `pip install pywin32 pyautogui`.
 
 `silero-vad` instala torch por su cuenta: es el VAD principal de la escucha
 (si no está, manda WebRTC o la energía adaptativa).

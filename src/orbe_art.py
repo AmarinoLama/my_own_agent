@@ -22,7 +22,7 @@ try:
 except ImportError:  # sin Pillow/numpy no hay arte que generar
     np = Image = None
 
-RAIZ = Path(__file__).resolve().parent
+RAIZ = Path(__file__).resolve().parent.parent  # raíz del proyecto (vive en src/)
 MASCOTA = RAIZ / "assets" / "mascota"
 ICONOS = ((RAIZ / "assets" / "orbe.ico", (127, 212, 255), (18, 70, 168)),
           (RAIZ / "assets" / "orbe-agente.ico", (150, 255, 190), (18, 120, 70)))
@@ -310,8 +310,31 @@ def escribir_icono(destino, color=(127, 212, 255), borde=(18, 70, 168)):
     return _escribir_ico(destino, imagenes)
 
 
+def escribir_png(destino, color=(127, 212, 255), borde=(18, 70, 168), lado=256):
+    """Escribe un .png del thinking orb.
+
+    Los accesos directos de Ubuntu/Linux son ficheros .desktop y no saben leer
+    .ico, así que el mismo arte se guarda también en PNG.
+    """
+    if Image is None or np is None:
+        raise RuntimeError("hacen falta Pillow y numpy para escribir el PNG")
+    imagen = pintar("piensa", fase=0.15, ancho=lado, alto=lado,
+                    color=color, borde=borde, escala=1.05, detalle=True)
+    destino = Path(destino)
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    imagen.save(destino, "PNG")
+    return destino
+
+
 def generar_iconos():
-    return [escribir_icono(ruta, color=centro, borde=borde) for ruta, centro, borde in ICONOS]
+    rutas = [escribir_icono(ruta, color=centro, borde=borde)
+             for ruta, centro, borde in ICONOS]
+    for ruta, centro, borde in ICONOS:
+        try:
+            escribir_png(ruta.with_suffix(".png"), color=centro, borde=borde)
+        except Exception:
+            pass                      # sin Pillow/numpy ya no hay .ico que valga
+    return rutas
 
 
 def main():

@@ -279,8 +279,14 @@ class PalmadasEntornoTest(unittest.TestCase):
             destino = instalar_palmadas(Path(carpeta))
             self.assertTrue(destino.exists())
             self.assertTrue(destino.name.startswith("Agente - palmadas"))
-            texto = destino.read_bytes()          # el .lnk guarda la orden en UTF-16
-            self.assertIn("--vigilar-palmadas".encode("utf-16-le"), texto)
+            texto = destino.read_bytes()
+            if os.name == "nt":
+                # el .lnk guarda la orden en UTF-16
+                orden = "--vigilar-palmadas".encode("utf-16-le")
+            else:
+                # el .desktop (autostart de Linux) la guarda en UTF-8
+                orden = b"--vigilar-palmadas"
+            self.assertIn(orden, texto)
 
             self.assertTrue(desinstalar_palmadas(Path(carpeta)))
             self.assertFalse(destino.exists())

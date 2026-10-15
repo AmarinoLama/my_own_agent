@@ -1,8 +1,8 @@
 """La barra notch con tu agente de memoria detrás.
 
-    python orbe.py                   # hablar por micrófono
-    python orbe.py --texto           # escribir en la consola
-    python orbe.py --acceso-directo  # icono "Agente" en el escritorio
+    python src/orbe.py                   # hablar por micrófono
+    python src/orbe.py --texto           # escribir en la consola
+    python src/orbe.py --acceso-directo  # icono "Agente" en el escritorio
 
 El orbe, el oído y la voz se implementan en voz.py; aquí solo se le conecta el
 agente con memoria.
@@ -11,9 +11,10 @@ agente con memoria.
 import sys
 from pathlib import Path
 
-RAIZ = Path(__file__).resolve().parent
-CARPETA = RAIZ
-sys.path.insert(0, str(RAIZ))
+SRC = Path(__file__).resolve().parent
+RAIZ = SRC.parent
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 import voz  # noqa: E402
 
@@ -28,7 +29,7 @@ def main() -> None:
 
     if args.acceso_directo:
         ruta = voz.crear_acceso_directo(
-            script=CARPETA / "orbe.py",
+            script=SRC / "orbe.py",
             nombre="Agente",
             descripcion="Hablar con tu agente (orbe)",
             icono=RAIZ / "assets" / "orbe-agente.ico",

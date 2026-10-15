@@ -1,8 +1,8 @@
 """Chat por consola con tu agente: contesta y además recuerda.
 
-    python chat.py
-    python chat.py -o "recuerda que mi color favorito es el verde"
-    python chat.py --memoria C:\\ruta\\a\\mis-notas
+    python src/chat.py
+    python src/chat.py -o "recuerda que mi color favorito es el verde"
+    python src/chat.py --memoria /ruta/a/mis-notas
 
 Dentro del chat: /stats, /memoria, /reset y /salir.
 """
@@ -11,8 +11,9 @@ import argparse
 import sys
 from pathlib import Path
 
-RAIZ = Path(__file__).resolve().parent
-sys.path.insert(0, str(RAIZ))
+SRC = Path(__file__).resolve().parent
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 from chat_cli import configurar_salida  # noqa: E402
 from cerebro import Agente, MODELO_DEFECTO, MODELO_RESPALDO  # noqa: E402

@@ -34,7 +34,14 @@ import subprocess
 import sys
 import threading
 import time
-import tkinter as tk
+try:
+    import tkinter as tk
+except ImportError:      # Ubuntu/Debian no lo traen: sudo apt install python3-tk
+    tk = None
+
+# El error que Tk lanza cuando no acepta algo (o cuando no hay Tk instalado):
+# así se puede capturar sin que el propio `except` reviente si tk es None.
+ErrorTk = tk.TclError if tk is not None else RuntimeError
 import unicodedata
 import os
 import urllib.error
@@ -58,7 +65,10 @@ except ImportError:
 
 from chat_cli import MODELO_DEFECTO, MODELO_RESPALDO, ChatCLI, configurar_salida
 
-RAIZ = Path(__file__).resolve().parent
+SRC = Path(__file__).resolve().parent
+RAIZ = SRC.parent                    # raíz del proyecto: .env, memoria/, assets/
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 CONFIG = RAIZ / "voz_config.json"
 
 # Única instancia de PyAudio del programa (ver _pyaudio)
@@ -87,8 +97,28 @@ SRE_SOUND_END = 4               # deja de oír algo
 SGDS_ACTIVE = 1                 # dictado activo
 
 
+def _foto_ppm(data):
+    """Imagen de Tk a partir de un PPM.
+
+    Va en una función aparte para que las pruebas puedan sustituirla sin tener
+    Tk instalado: `python3-tk` solo hace falta para la ventana de verdad.
+    """
+    if tk is None:
+        raise RuntimeError("falta tkinter: sudo apt install python3-tk")
+    return tk.PhotoImage(data=data)
+
+
+def exigir_tk() -> None:
+    """Falla con un mensaje claro si falta Tk (hace falta para la ventana)."""
+    if tk is None:
+        raise RuntimeError(
+            "Falta tkinter: en Ubuntu/Debian instala `sudo apt install python3-tk` "
+            "y vuelve a lanzar el programa"
+        )
+
+
 def log(*partes) -> None:
-    """print seguro: si se lanza con pythonw (sin consola) escribe en voz.log."""
+    """print seguro: si se lanza con pythonw/sin consola escribe en voz.log."""
     texto = " ".join(str(p) for p in partes)
     if sys.stdout is None:
         try:
@@ -221,7 +251,7 @@ def _arreglar_nombre(nombre: str) -> str:
 def nombre_micro(indice: int | None) -> str:
     """Nombre legible del micrófono que se está usando."""
     if indice is None:
-        return "micrófono predeterminado de Windows"
+        return "micrófono predeterminado"
 
     for numero, nombre, _ in listar_microfonos():
         if numero == indice:
@@ -293,6 +323,11 @@ class Voz:
     """Voz de salida: usa las voces de Windows (SAPI)."""
 
     def __init__(self, preferida: str = "Helena", velocidad: int = 0, volumen: int = 100):
+        if not SAPI_DISPONIBLE:
+            raise RuntimeError(
+                "La voz SAPI es de Windows; en este sistema usa el motor edge "
+                "(VOZ_MOTOR=edge o --voz-motor edge)"
+            )
         pythoncom.CoInitialize()
         self.sapi = win32com.client.Dispatch("SAPI.SpVoice")
         self.sapi.Rate = max(-10, min(10, velocidad))
@@ -350,21 +385,68 @@ class Voz:
             time.sleep(comprobar_cada)
 
 
+class _ReproductorAudio:
+    """Reproduce bytes de audio: winsound en Windows, pygame en el resto.
+
+    El mismo par de métodos en los dos casos para que Fish Audio (y cualquier
+    respaldo con audio en memoria) funcione igual en Windows y en Ubuntu.
+    """
+
+    def __init__(self):
+        self._winsound = None
+        self._pygame = None
+
+        if sys.platform.startswith("win"):
+            try:
+                import winsound
+                self._winsound = winsound
+            except ImportError:
+                pass
+
+        if self._winsound is None:
+            try:
+                import pygame
+                if not pygame.mixer.get_init():
+                    pygame.mixer.init()
+            except Exception as error:
+                raise RuntimeError(
+                    "falta un reproductor de audio: pip install pygame"
+                ) from error
+            self._pygame = pygame
+
+    def reproducir(self, audio: bytes, volumen: int = 100) -> None:
+        """Suena en segundo plano (winsound ya es asíncrono)."""
+        if self._winsound is not None:
+            self._winsound.PlaySound(audio,
+                                     self._winsound.SND_MEMORY | self._winsound.SND_ASYNC)
+            return
+
+        sonido = self._pygame.mixer.Sound(buffer=audio)
+        sonido.set_volume(max(0.0, min(1.0, volumen / 100)))
+        sonido.play()
+
+    def parar(self) -> None:
+        """Corta lo que esté sonando (para poder interrumpirle)."""
+        if self._winsound is not None:
+            self._winsound.PlaySound(None, self._winsound.SND_PURGE)
+            return
+        try:
+            self._pygame.mixer.stop()
+        except Exception:
+            pass
+
+
 class VozFishAudio:
     """Síntesis de voz de Fish Audio usando una voz clonada o compartida.
 
     Fish devuelve audio WAV desde su API. Se reproduce directamente con el
-    reproductor de Windows, sin guardar conversaciones ni la clave en disco.
+    reproductor del sistema (winsound en Windows, pygame en Ubuntu/Linux), sin
+    guardar conversaciones ni la clave en disco.
     Requiere FISH_AUDIO_API_KEY y FISH_AUDIO_VOICE_ID en .env.
     """
 
     def __init__(self, voz_id: str | None = None, velocidad: int = 0, volumen: int = 100):
-        try:
-            import winsound
-        except ImportError as error:
-            raise RuntimeError("Fish Audio necesita Windows para reproducir el audio") from error
-
-        self.winsound = winsound
+        self._audio = _ReproductorAudio()
         self.api_key = (os.getenv("FISH_AUDIO_API_KEY") or os.getenv("FISH_API_KEY") or "").strip()
         self.voz_id = (voz_id or os.getenv("FISH_AUDIO_VOICE_ID") or "").strip()
         self.endpoint = os.getenv("FISH_AUDIO_ENDPOINT", "https://api.fish.audio/v1/tts").strip()
@@ -425,14 +507,14 @@ class VozFishAudio:
 
         with self._bloqueo:
             self._termina = time.time() + duracion
-        self.winsound.PlaySound(audio, self.winsound.SND_MEMORY | self.winsound.SND_ASYNC)
+        self._audio.reproducir(audio, self.volumen)
 
     def hablando(self) -> bool:
         with self._bloqueo:
             return time.time() < self._termina
 
     def callar(self) -> None:
-        self.winsound.PlaySound(None, self.winsound.SND_PURGE)
+        self._audio.parar()
         with self._bloqueo:
             self._termina = 0.0
 
@@ -626,6 +708,41 @@ class VozEdge:
             time.sleep(comprobar_cada)
 
 
+def crear_voz(args):
+    """Elige el motor de salida según el sistema y VOZ_MOTOR; None con --mudo.
+
+    El orden por defecto (auto) es Edge TTS, que es gratuita y funciona igual en
+    Windows y en Ubuntu. Si Edge falla y el sistema tiene SAPI, habla la voz de
+    Windows; si no la tiene, el error explica qué falta en vez de romper.
+    """
+    if args.mudo:
+        return None
+
+    motor = (args.voz_motor or os.getenv("VOZ_MOTOR", "auto")).lower()
+
+    if motor == "fish":
+        return VozFishAudio(args.voz_salida, args.velocidad, args.volumen)
+
+    if motor == "sapi":
+        if not SAPI_DISPONIBLE:
+            raise RuntimeError(
+                "La voz SAPI es solo de Windows: usa --voz-motor edge "
+                "(o VOZ_MOTOR=edge en el .env)"
+            )
+        return Voz(args.voz_salida or "Helena", args.velocidad, args.volumen)
+
+    try:
+        return VozEdge(args.voz_salida, args.velocidad, args.volumen)
+    except Exception as error:
+        if SAPI_DISPONIBLE:
+            log(f"{GRIS}Edge TTS no disponible ({error}); uso la voz de Windows.{RESET}")
+            return Voz(args.voz_salida or "Helena", args.velocidad, args.volumen)
+        raise RuntimeError(
+            f"Sin voz: Edge TTS no está disponible ({error}) y este sistema no tiene "
+            f"SAPI. Instala `pip install edge-tts pygame` y comprueba la conexión."
+        ) from error
+
+
 class _EventosSAPI:
     """Recibe los avisos del reconocedor de Windows y los guarda en su oído."""
 
@@ -667,6 +784,8 @@ class OidoSAPI:
         self.nivel = 0.0
         self.descripcion = "Windows"
 
+        if not SAPI_DISPONIBLE:
+            raise RuntimeError("El reconocedor SAPI es de Windows: usa --oido google")
         pythoncom.CoInitialize()
         self.reconocedor = win32com.client.Dispatch("SAPI.SpInprocRecognizer")
         self.reconocedor.AudioInputStream = win32com.client.Dispatch("SAPI.SpMMAudioIn")
@@ -1587,12 +1706,17 @@ def crear_oido(preferido: str = "auto", silencio: float = 0.7,
         except Exception as error:
             if preferido == "google":
                 raise
-            log(f"{GRIS}[i] Sin SpeechRecognition ({type(error).__name__}), uso el de Windows{RESET}")
+            log(f"{GRIS}[i] Sin SpeechRecognition ({type(error).__name__}), "
+                f"pruebo el reconocimiento del sistema{RESET}")
 
-    if not SAPI_DISPONIBLE:
-        raise RuntimeError("Falta pywin32: pip install pywin32")
+    if SAPI_DISPONIBLE:
+        return OidoSAPI()
 
-    return OidoSAPI()
+    raise RuntimeError(
+        "No hay ningún reconocedor de voz disponible: instala "
+        "`pip install SpeechRecognition` (Ubuntu/Windows) o bien usa "
+        "--texto / --oido teclado"
+    )
 
 
 class Orbe:
@@ -1645,6 +1769,7 @@ class Orbe:
         self.al_elegir_micro = al_elegir_micro
         self.cola: queue.Queue[tuple] = queue.Queue()
 
+        exigir_tk()
         self.root = tk.Tk()
         self.root.title(titulo)
         self.root.overrideredirect(True)                     # sin bordes ni barra
@@ -1891,9 +2016,9 @@ class Orbe:
         )
         ppm = b"P6 %d %d 255 " % (self.ANCHO, self.ALTO) + capa.tobytes("raw", "RGB")
         try:
-            foto = tk.PhotoImage(data=ppm)
+            foto = _foto_ppm(ppm)
             self.lienzo.itemconfig(self.sprite, image=foto)
-        except tk.TclError:
+        except ErrorTk:
             self._pintar_tk()
             return
         self._foto = foto
@@ -2224,6 +2349,7 @@ class SelectorMicro:
         self.medidor: MedidorNivel | None = None
         self.cargando = True
 
+        exigir_tk()
         self.ventana = tk.Toplevel(padre)
         self.ventana.title("Entrada de voz")
         self.ventana.attributes("-topmost", True)
@@ -2497,12 +2623,18 @@ def generar_icono(destino: Path, centro: tuple = (127, 212, 255),
                   borde: tuple = (18, 70, 168)) -> Path:
     """Escribe un .ico con el thinking orb de orbe_art (varios tamaños).
 
-    Si falta Pillow o numpy cae a la esfera dibujada a mano de 32 px, que no
-    necesita dependencias.
+    El escritorio de Ubuntu/Linux no lee .ico, así que se escribe también el
+    .png de al lado. Si falta Pillow o numpy cae a la esfera dibujada a mano de
+    32 px, que no necesita dependencias.
     """
     try:
         import orbe_art
-        return orbe_art.escribir_icono(destino, color=centro, borde=borde)
+        ruta = orbe_art.escribir_icono(destino, color=centro, borde=borde)
+        try:
+            orbe_art.escribir_png(ruta.with_suffix(".png"), color=centro, borde=borde)
+        except Exception:
+            pass                  # el .ico ya está; el .png es solo para Linux
+        return ruta
     except Exception as error:
         log(f"{GRIS}Arte fino no disponible ({type(error).__name__}); "
             f"icono de 32 px.{RESET}")
@@ -2554,6 +2686,69 @@ def generar_icono(destino: Path, centro: tuple = (127, 212, 255),
     return destino
 
 
+def _interprete_sin_consola() -> Path:
+    """pythonw.exe en Windows (abre sin consola); el intérprete actual en el resto.
+
+    El orbe es toda la interfaz: en Windows no debe quedar una ventana negra
+    detrás, y en Ubuntu/Linux no existe pythonw.
+    """
+    if sys.platform.startswith("win"):
+        pythonw = Path(sys.executable).with_name("pythonw.exe")
+        if pythonw.exists():
+            return pythonw
+    return Path(sys.executable)
+
+
+def carpeta_escritorio() -> Path:
+    """Escritorio del usuario en Windows, Ubuntu o cualquier escritorio XDG."""
+    if sys.platform.startswith("win"):
+        if SAPI_DISPONIBLE:
+            shell = win32com.client.Dispatch("WScript.Shell")
+            return Path(shell.SpecialFolders("Desktop"))
+        return Path.home() / "Desktop"
+
+    usuario = Path.home()
+    usuarios = usuario / ".config" / "user-dirs.dirs"     # respeta la carpeta real
+    try:
+        for linea in usuarios.read_text(encoding="utf-8").splitlines():
+            if linea.startswith("XDG_DESKTOP_DIR="):
+                valor = linea.split("=", 1)[1].strip().strip('"')
+                valor = valor.replace("$HOME", str(usuario))
+                if valor:
+                    return Path(valor)
+    except OSError:
+        pass
+
+    for nombre in ("Escritorio", "Desktop"):              # español e inglés
+        candidata = usuario / nombre
+        if candidata.is_dir():
+            return candidata
+    return usuario / "Desktop"
+
+
+def _comilla_exec(valor: str) -> str:
+    """Comilla una parte del Exec de un .desktop como manda su spec.
+
+    Ojo: el fichero .desktop no se interpreta con la shell, así que
+    `shlex.quote` (comillas simples) no vale; aquí se usan comillas dobles y
+    barra invertida, que es lo que entienden GNOME, KDE y Xfce.
+    """
+    if not any(c in valor for c in ' \t\n"\\`$'):
+        return valor
+    escapado = (valor.replace("\\", "\\\\").replace('"', '\\"')
+                .replace("`", "\\`").replace("$", "\\$"))
+    return f'"{escapado}"'
+
+
+def _icono_de_escritorio(dibujo: Path) -> str:
+    """Icono que entiende un .desktop: el PNG generado, si no, la mascota."""
+    png = dibujo.with_suffix(".png")
+    if png.exists():
+        return str(png)
+    mascota = RAIZ / "assets" / "mascota" / "idle" / "00.png"
+    return str(mascota) if mascota.exists() else str(dibujo)
+
+
 def crear_acceso_directo(
     script: Path | None = None,
     nombre: str = "Voz",
@@ -2563,16 +2758,30 @@ def crear_acceso_directo(
     borde: tuple = (18, 70, 168),
     tecla: str = "CTRL+ALT+V",
 ) -> Path:
-    """Crea en el escritorio un acceso directo que abre el orbe con su icono."""
+    """Crea en el escritorio un acceso directo que abre el orbe con su icono.
+
+    En Windows es un `.lnk` (y si se pide, con atajo de teclado); en Ubuntu y el
+    resto de Linux un `.desktop`, que es lo que entienden GNOME, KDE y Xfce.
+    """
     dibujo = generar_icono(icono or RAIZ / "assets" / "orbe.ico", centro, borde)
-    enlace_script = script or RAIZ / "voz.py"
+    enlace_script = script or SRC / "voz.py"
+
+    if sys.platform.startswith("win"):
+        return _acceso_directo_windows(dibujo, enlace_script, nombre, descripcion, tecla)
+    return _acceso_directo_escritorio(dibujo, enlace_script, nombre, descripcion, tecla)
+
+
+def _acceso_directo_windows(dibujo: Path, enlace_script: Path, nombre: str,
+                             descripcion: str, tecla: str) -> Path:
+    """Atajo de Windows con WScript.Shell (necesita pywin32)."""
+    if not SAPI_DISPONIBLE:
+        raise RuntimeError(
+            "El acceso directo de Windows necesita pywin32: pip install pywin32"
+        )
 
     shell = win32com.client.Dispatch("WScript.Shell")
     escritorio = Path(shell.SpecialFolders("Desktop"))
-
-    # pythonw abre sin ventana de consola (el orbe es toda la interfaz)
-    pythonw = Path(sys.executable).with_name("pythonw.exe")
-    interprete = pythonw if pythonw.exists() else Path(sys.executable)
+    interprete = _interprete_sin_consola()
 
     enlace = shell.CreateShortCut(str(escritorio / f"{nombre}.lnk"))
     enlace.TargetPath = str(interprete)
@@ -2588,28 +2797,82 @@ def crear_acceso_directo(
     return escritorio / f"{nombre}.lnk"
 
 
+def _acceso_directo_escritorio(dibujo: Path, enlace_script: Path, nombre: str,
+                                descripcion: str, tecla: str) -> Path:
+    """Fichero .desktop: la forma de lanzar programas en Ubuntu/Linux."""
+    destino = carpeta_escritorio() / f"{nombre}.desktop"
+    interprete = _interprete_sin_consola()
+
+    contenido = [
+        "[Desktop Entry]",
+        "Type=Application",
+        f"Name={nombre}",
+        f"Comment={descripcion}",
+        f"Exec={_comilla_exec(str(interprete))} {_comilla_exec(str(enlace_script))}",
+        f"Path={RAIZ}",
+        f"Icon={_icono_de_escritorio(dibujo)}",
+        "Terminal=false",
+        "Categories=Utility;",
+        "StartupNotify=false",
+    ]
+    if tecla:
+        # Un .desktop no puede asignar atajos: se lo dejamos anotado al usuario.
+        contenido.append(
+            f"# Atajo {tecla}: asígnalo en Ajustes › Teclado › Atajos personalizados."
+        )
+
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    destino.write_text("\n".join(contenido) + "\n", encoding="utf-8")
+    destino.chmod(destino.stat().st_mode | 0o755)   # sin permiso de ejecución GNOME lo ignora
+    return destino
+
+
 # --- Dos palmadas para abrir el agente ------------------------------------
 
 VENTANA_AGENTE = "Voz"                # el título que le pone Orbe()
 MUTEX_AGENTE = "Local\\AgenteOrbeVoz"
 MUTEX_VIGILANTE = "Local\\AgentePalmadas"
 ENLACE_PALMADAS = "Agente - palmadas"
-_mutex_agente = 0                     # el proceso mantiene vivo su mutex
+_mutex_agente = 0                     # el proceso mantiene vivo su mutex (Windows)
 _mutex_vigilante = 0
+PID_AGENTE = RAIZ / ".agente.pid"     # en Linux el PID hace de mutex
+PID_VIGILANTE = RAIZ / ".palmadas.pid"
 
 
 def ventana_agente() -> int:
     """HWND de la ventana del orbe, o 0 si no está abierta."""
+    if not sys.platform.startswith("win"):
+        return 0                      # en Linux no hay HWND: se usa el PID
     try:
         return ctypes.windll.user32.FindWindowW(None, VENTANA_AGENTE)
     except Exception:
         return 0
 
 
+def _es_nuestro_agente(pid: int) -> bool:
+    """True si ese PID sigue vivo y sigue siendo el agente (no un PID reciclado)."""
+    try:
+        os.kill(pid, 0)
+    except (OSError, ValueError):
+        return False
+    try:
+        orden = Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", "replace")
+    except OSError:
+        return False
+    return "orbe.py" in orden or "voz.py" in orden
+
+
 def agente_vivo() -> bool:
     """True si ya hay un agente en marcha: ventana visible o proceso vivo."""
     if ventana_agente():
         return True
+    if not sys.platform.startswith("win"):
+        try:
+            pid = int(PID_AGENTE.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            return False
+        return _es_nuestro_agente(pid)
+
     kernel32 = ctypes.windll.kernel32
     manejador = kernel32.OpenMutexW(0x00100000, False, MUTEX_AGENTE)  # SYNCHRONIZE
     if manejador:
@@ -2621,8 +2884,25 @@ def agente_vivo() -> bool:
 def marcar_agente_vivo() -> None:
     """El agente avisa de que existe para que el vigilante suelte el micro."""
     global _mutex_agente
-    if not _mutex_agente:
-        _mutex_agente = ctypes.windll.kernel32.CreateMutexW(None, False, MUTEX_AGENTE)
+    if sys.platform.startswith("win"):
+        if not _mutex_agente:
+            _mutex_agente = ctypes.windll.kernel32.CreateMutexW(None, False, MUTEX_AGENTE)
+        return
+    try:
+        PID_AGENTE.write_text(str(os.getpid()), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def olvidar_agente() -> None:
+    """Al cerrarse, quita el aviso de «ya hay un agente» (Linux, vía PID)."""
+    if sys.platform.startswith("win"):
+        return
+    try:
+        if int(PID_AGENTE.read_text(encoding="utf-8").strip()) == os.getpid():
+            PID_AGENTE.unlink()
+    except (OSError, ValueError):
+        pass
 
 
 def traer_al_frente(ventana: int | None = None) -> bool:
@@ -2641,11 +2921,15 @@ def abrir_agente() -> bool:
     if traer_al_frente():
         log(f"{GRIS}[palmadas][{_hora()}] el agente ya estaba abierto: ventana al frente{RESET}")
         return False
+    if agente_vivo():
+        # Abierto pero sin ventana localizable (Linux no busca por HWND):
+        # abrir otro duplicaría el micro y la memoria.
+        log(f"{GRIS}[palmadas][{_hora()}] el agente ya estaba abierto: no abro otra copia{RESET}")
+        return False
 
-    pythonw = Path(sys.executable).with_name("pythonw.exe")
-    interprete = pythonw if pythonw.exists() else Path(sys.executable)
+    interprete = _interprete_sin_consola()
     log(f"{AZUL}[palmadas][{_hora()}] dos palmadas: abriendo el agente{RESET}")
-    subprocess.Popen([str(interprete), str(RAIZ / "orbe.py")], cwd=str(RAIZ))
+    subprocess.Popen([str(interprete), str(SRC / "orbe.py")], cwd=str(RAIZ))
     return True
 
 
@@ -2709,7 +2993,7 @@ def _pico_de_sondeo(indice: int | None, segundos: float = 1.0) -> float:
 
 
 def _candidatos_micro(indice: int | None) -> list:
-    """El micro pedido primero, luego el de Windows y después los micrófonos."""
+    """El micro pedido primero, luego el predeterminado y después los micrófonos."""
     microfonos = listar_microfonos()
     nombres = {numero: nombre for numero, nombre, _ in microfonos}
     predeterminado = next((numero for numero, _, es_defecto in microfonos if es_defecto), None)
@@ -2853,20 +3137,45 @@ def _bajar_prioridad() -> None:
         pass
 
 
+def _solo_un_vigilante() -> bool:
+    """Un único vigilante por sesión. False si ya hay otro (hay que salirse).
+
+    En Windows lo resuelve un mutex con nombre; en Linux, un fichero de PID.
+    """
+    global _mutex_vigilante
+
+    if not sys.platform.startswith("win"):
+        try:
+            pid = int(PID_VIGILANTE.read_text(encoding="utf-8").strip())
+            os.kill(pid, 0)
+            log(f"{GRIS}[palmadas] ya hay un vigilante de palmadas en marcha{RESET}")
+            return False
+        except (OSError, ValueError):
+            pass                        # estaba muerto o ilegible: seguimos
+        try:
+            PID_VIGILANTE.write_text(str(os.getpid()), encoding="utf-8")
+        except OSError:
+            pass
+        return True
+
+    kernel32 = ctypes.windll.kernel32
+    if not _mutex_vigilante:
+        _mutex_vigilante = kernel32.CreateMutexW(None, False, MUTEX_VIGILANTE)
+        if kernel32.GetLastError() == 183:      # ERROR_ALREADY_EXISTS
+            log(f"{GRIS}[palmadas] ya hay un vigilante de palmadas en marcha{RESET}")
+            return False
+    return True
+
+
 def vigilar_palmadas(indice_micro: int | None = None) -> None:
     """Escucha dos palmadas en segundo plano para abrir el agente.
 
     El micro solo se abre mientras el agente no está en marcha; no transcribe,
     no guarda ni manda audio: solo mide picos en local.
     """
-    global _mutex_vigilante
     _bajar_prioridad()
-    kernel32 = ctypes.windll.kernel32
-    if not _mutex_vigilante:
-        _mutex_vigilante = kernel32.CreateMutexW(None, False, MUTEX_VIGILANTE)
-        if kernel32.GetLastError() == 183:      # ERROR_ALREADY_EXISTS
-            log(f"{GRIS}[palmadas] ya hay un vigilante de palmadas en marcha{RESET}")
-            return
+    if not _solo_un_vigilante():
+        return
     umbral = umbral_palmadas()
     log(f"{AZUL}[palmadas] dos palmadas abren el agente "
         f"(umbral {'fijo ' + format(umbral, '.0f') if umbral else 'calibrado'}){RESET}")
@@ -2904,20 +3213,51 @@ def vigilar_palmadas(indice_micro: int | None = None) -> None:
 
 
 def carpeta_inicio_sesion() -> Path:
-    """Carpeta de inicio de sesión de Windows (se ejecuta al entrar el usuario)."""
+    """Carpeta de inicio de sesión: la de Windows, o autostart en Linux."""
+    if not sys.platform.startswith("win"):
+        carpeta = Path.home() / ".config" / "autostart"
+        carpeta.mkdir(parents=True, exist_ok=True)
+        return carpeta
+    if not SAPI_DISPONIBLE:
+        raise RuntimeError("El inicio de sesión de Windows necesita pywin32: pip install pywin32")
     shell = win32com.client.Dispatch("WScript.Shell")
     return Path(shell.SpecialFolders("Startup"))
 
 
+def _nombre_vigilante() -> str:
+    """Nombre del fichero del vigilante en el inicio de sesión (Windows o Linux)."""
+    return f"{ENLACE_PALMADAS}.lnk" if sys.platform.startswith("win") \
+        else f"{ENLACE_PALMADAS}.desktop"
+
+
 def instalar_palmadas(carpeta: Path | None = None) -> Path:
-    """Deja el vigilante de palmadas en el inicio de sesión de Windows."""
-    destino = (carpeta or carpeta_inicio_sesion()) / f"{ENLACE_PALMADAS}.lnk"
+    """Deja el vigilante de palmadas en el inicio de sesión (Windows o Linux)."""
+    destino = (carpeta or carpeta_inicio_sesion()) / _nombre_vigilante()
+    interprete = _interprete_sin_consola()
+
+    if not sys.platform.startswith("win"):
+        # GNOME/Xfce/KDE leen .desktop de ~/.config/autostart al entrar.
+        orden = [str(interprete), str(SRC / "orbe.py"), "--vigilar-palmadas"]
+        contenido = [
+            "[Desktop Entry]",
+            "Type=Application",
+            f"Name={ENLACE_PALMADAS}",
+            "Comment=Dos palmadas abren el agente",
+            f"Exec={' '.join(_comilla_exec(p) for p in orden)}",
+            f"Path={RAIZ}",
+            f"Icon={_icono_de_escritorio(RAIZ / 'assets' / 'orbe-agente.ico')}",
+            "Terminal=false",
+            "X-GNOME-Autostart-enabled=true",
+        ]
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        destino.write_text("\n".join(contenido) + "\n", encoding="utf-8")
+        destino.chmod(destino.stat().st_mode | 0o755)
+        return destino
+
     shell = win32com.client.Dispatch("WScript.Shell")
-    pythonw = Path(sys.executable).with_name("pythonw.exe")
-    interprete = pythonw if pythonw.exists() else Path(sys.executable)
     enlace = shell.CreateShortCut(str(destino))
     enlace.TargetPath = str(interprete)
-    enlace.Arguments = f'"{RAIZ / "orbe.py"}" --vigilar-palmadas'
+    enlace.Arguments = f'"{SRC / "orbe.py"}" --vigilar-palmadas'
     enlace.WorkingDirectory = str(RAIZ)
     enlace.IconLocation = f"{RAIZ / 'assets' / 'orbe-agente.ico'},0"
     enlace.Description = "Dos palmadas para abrir el agente"
@@ -2927,7 +3267,7 @@ def instalar_palmadas(carpeta: Path | None = None) -> Path:
 
 def desinstalar_palmadas(carpeta: Path | None = None) -> bool:
     """Quita el vigilante del inicio de sesión. True si había algo que quitar."""
-    destino = (carpeta or carpeta_inicio_sesion()) / f"{ENLACE_PALMADAS}.lnk"
+    destino = (carpeta or carpeta_inicio_sesion()) / _nombre_vigilante()
     if destino.exists():
         destino.unlink()
         return True
@@ -2936,26 +3276,60 @@ def desinstalar_palmadas(carpeta: Path | None = None) -> bool:
 
 def _arrancar_vigilante(indice_micro: int | None = None) -> None:
     """Lanza el vigilante para esta sesión (si ya hay otro, este se sale solo)."""
-    pythonw = Path(sys.executable).with_name("pythonw.exe")
-    interprete = pythonw if pythonw.exists() else Path(sys.executable)
-    orden = [str(interprete), str(RAIZ / "orbe.py"), "--vigilar-palmadas"]
+    interprete = _interprete_sin_consola()
+    orden = [str(interprete), str(SRC / "orbe.py"), "--vigilar-palmadas"]
     if indice_micro is not None:
         orden += ["--micro", str(indice_micro)]
-    subprocess.Popen(orden, cwd=str(RAIZ), creationflags=subprocess.CREATE_NO_WINDOW)
+    if sys.platform.startswith("win"):
+        subprocess.Popen(orden, cwd=str(RAIZ), creationflags=subprocess.CREATE_NO_WINDOW)
+    else:
+        subprocess.Popen(orden, cwd=str(RAIZ), start_new_session=True)
 
 
-def detener_vigilante() -> int:
-    """Cierra los procesos que están con --vigilar-palmadas. Devuelve cuántos."""
-    if not SAPI_DISPONIBLE:
-        return -1
+def _pids_del_vigilante() -> list[int]:
+    """PIDs de los procesos lanzados con --vigilar-palmadas (Windows o Linux)."""
+    if not sys.platform.startswith("win"):
+        encontrados = []
+        try:
+            entradas = Path("/proc").iterdir()
+        except OSError:
+            return encontrados
+        for entrada in entradas:
+            if not entrada.name.isdigit():
+                continue
+            try:
+                orden = (entrada / "cmdline").read_bytes().decode("utf-8", "replace")
+            except OSError:
+                continue
+            if "--vigilar-palmadas" in orden:
+                encontrados.append(int(entrada.name))
+        return encontrados
+
+    # Windows: la WMI de pywin32 es la única forma de ver la línea de orden.
     localizador = win32com.client.Dispatch("WbemScripting.SWbemLocator")
     servicios = localizador.ConnectServer(".", r"root\cimv2")
     consulta = ("SELECT ProcessId, CommandLine FROM Win32_Process "
                 "WHERE CommandLine LIKE '%--vigilar-palmadas%'")
+    return [int(proceso.ProcessId) for proceso in servicios.ExecQuery(consulta)]
+
+
+def detener_vigilante() -> int:
+    """Cierra los procesos que están con --vigilar-palmadas. Devuelve cuántos.
+
+    -1 significa que en este sistema no se pudieron buscar (Windows sin pywin32).
+    """
+    if sys.platform.startswith("win") and not SAPI_DISPONIBLE:
+        return -1
+
     cerrados = 0
     fallos = []
-    for proceso in servicios.ExecQuery(consulta):
-        pid = int(proceso.ProcessId)
+    try:
+        pids = _pids_del_vigilante()
+    except Exception as error:
+        log(f"{ROJO}No se pudieron buscar los vigilantes: {error}{RESET}")
+        return -1
+
+    for pid in pids:
         if pid == os.getpid():
             continue
         try:
@@ -2966,6 +3340,14 @@ def detener_vigilante() -> int:
             cerrados += 1
         except Exception as error:
             fallos.append(f"{pid} ({error})")
+
+    if not sys.platform.startswith("win"):
+        # Cualquiera que haya sido el resultado, ya no queda vigilante arrancado.
+        try:
+            PID_VIGILANTE.unlink()
+        except OSError:
+            pass
+
     if fallos:
         log(f"{ROJO}No se pudo detener: {', '.join(fallos)}{RESET}")
     return cerrados
@@ -2976,8 +3358,8 @@ def atender_palmadas(args, indice_micro: int | None) -> bool:
     if args.detener_palmadas:
         cerrados = detener_vigilante()
         if cerrados < 0:
-            log(f"{ROJO}Para el vigilante de palmadas necesitas pywin32: "
-                f"pip install pywin32{RESET}")
+            log(f"{ROJO}No se pudieron buscar los vigilantes: en Windows hace "
+                f"falta pywin32 (pip install pywin32){RESET}")
         elif cerrados:
             log(f"{AZUL}Vigilante de palmadas detenido ({cerrados}){RESET}")
         else:
@@ -2992,8 +3374,8 @@ def atender_palmadas(args, indice_micro: int | None) -> bool:
         return True
 
     if args.instalar_palmadas:
-        if not SAPI_DISPONIBLE:
-            log(f"{ROJO}Para instalar el vigilante necesitas pywin32: "
+        if not SAPI_DISPONIBLE and sys.platform.startswith("win"):
+            log(f"{ROJO}Para instalar el vigilante en Windows necesitas pywin32: "
                 f"pip install pywin32{RESET}")
             return True
         try:
@@ -3003,7 +3385,7 @@ def atender_palmadas(args, indice_micro: int | None) -> bool:
                 f"{type(error).__name__}: {error}{RESET}")
             return True
         log(f"{AZUL}Dos palmadas abrirán el agente:{RESET} {ruta}")
-        log(f"{GRIS}Arranca con Windows; de momento queda escuchando ya mismo.{RESET}")
+        log(f"{GRIS}Arranca al entrar en la sesión; de momento queda escuchando ya mismo.{RESET}")
         _arrancar_vigilante(indice_micro)
         return True
 
@@ -3020,7 +3402,7 @@ def atender_microfono(args, indice_micro: int | None) -> bool:
         micros = listar_microfonos()
         log(f"{AZUL}Entradas de voz detectadas:{RESET}")
         for indice, nombre, predeterminado in micros:
-            marca = f"{VERDE}  <- predeterminado de Windows{RESET}" if predeterminado else ""
+            marca = f"{VERDE}  <- predeterminado del sistema{RESET}" if predeterminado else ""
             log(f"  {indice:>3}  {nombre}{marca}")
         log(f"{GRIS}Para fijarlo: --micro <número>, o elige con el ratón en "
             f"clic derecho sobre el orbe > Elegir micrófono…{RESET}")
@@ -3042,7 +3424,7 @@ def crear_parser(descripcion: str = "Habla con el modelo usando el orbe.") -> ar
     parser = argparse.ArgumentParser(description=descripcion)
     parser.add_argument("-m", "--modelo", default=MODELO_DEFECTO, help="Modelo a usar")
     parser.add_argument("--oido", choices=["auto", "sapi", "google", "teclado"], default="auto",
-                        help="De dónde viene tu voz (por defecto, reconocimiento en español)")
+                        help="De dónde viene tu voz (auto: el que haya en tu sistema)")
     parser.add_argument("--idioma", default="es-ES",
                         help="Idioma del reconocimiento de voz (por defecto: es-ES)")
     parser.add_argument("--silencio", type=float, default=0.7,
@@ -3055,8 +3437,9 @@ def crear_parser(descripcion: str = "Habla con el modelo usando el orbe.") -> ar
     parser.add_argument("--texto", action="store_true", help="Escribir en consola en vez de hablar")
     parser.add_argument("--voz-salida", default=None,
                         help="Voz de salida: nombre SAPI (p. ej. Helena), voz Edge o ID de Fish Audio")
-    parser.add_argument("--voz-motor", choices=["edge", "sapi", "fish"], default=None,
-                        help="Motor de salida: edge (Edge TTS, neural), sapi (Windows) o fish (Fish Audio)")
+    parser.add_argument("--voz-motor", choices=["auto", "edge", "sapi", "fish"], default=None,
+                        help="Motor de salida: auto (por defecto), edge (Edge TTS, "
+                             "neural), sapi (solo Windows) o fish (Fish Audio)")
     parser.add_argument("--velocidad", type=int, default=0, help="Velocidad de la voz (-10 a 10)")
     parser.add_argument("--volumen", type=int, default=100, help="Volumen de la voz (0 a 100)")
     parser.add_argument("--mudo", action="store_true", help="No hablar en voz alta")
@@ -3101,14 +3484,27 @@ def main() -> None:
     if atender_microfono(args, indice_micro):
         return
 
-    if not SAPI_DISPONIBLE and not args.texto and args.oido != "google":
-        log(f"{ROJO}Para el modo voz necesitas pywin32: pip install pywin32{RESET}")
-        sys.exit(1)
-
+    # Crear el icono no necesita micro ni reconocimiento: va antes de comprobarlos
     if args.acceso_directo:
         ruta = crear_acceso_directo(tecla=args.tecla or "CTRL+ALT+V")
         log(f"{AZUL}Acceso directo creado:{RESET} {ruta}")
+        if not sys.platform.startswith("win") and args.tecla:
+            log(f"{GRIS}Los .desktop no admiten atajos: asígnalo en "
+                f"Ajustes › Teclado › Atajos personalizados.{RESET}")
         return
+
+    if not args.texto and args.oido == "sapi" and not SAPI_DISPONIBLE:
+        log(f"{ROJO}El oído SAPI es solo de Windows: usa --oido auto, "
+            f"--oido google o --texto{RESET}")
+        sys.exit(1)
+
+    if not args.texto and not SAPI_DISPONIBLE and args.oido in ("auto", "google"):
+        try:
+            import speech_recognition  # noqa: F401
+        except ImportError:
+            log(f"{ROJO}Falta el reconocimiento de voz: "
+                f"pip install SpeechRecognition (o usa --texto / --oido teclado){RESET}")
+            sys.exit(1)
 
     chat = ChatCLI(
         modelo=args.modelo,
@@ -3203,21 +3599,7 @@ def arrancar(chat, args, indice_micro: int | None = None, preparar_chat=None) ->
                 args.transcripcion, args.modelo_whisper
             )
             caja["oido"] = oido
-            if args.mudo:
-                voz = None
-            else:
-                motor_voz = (args.voz_motor or os.getenv("VOZ_MOTOR", "sapi")).lower()
-                if motor_voz == "fish":
-                    voz = VozFishAudio(args.voz_salida, args.velocidad, args.volumen)
-                elif motor_voz == "edge":
-                    try:
-                        voz = VozEdge(args.voz_salida, args.velocidad, args.volumen)
-                    except Exception as error:
-                        log(f"{GRIS}Edge TTS no disponible ({error}); "
-                            f"uso la voz de Windows.{RESET}")
-                        voz = Voz(args.voz_salida or "Helena", args.velocidad, args.volumen)
-                else:
-                    voz = Voz(args.voz_salida or "Helena", args.velocidad, args.volumen)
+            voz = crear_voz(args)
 
             log(f"{AZUL}Modo voz listo.{RESET} Modelo: {chat_activo.modelo}")
             log(f"{GRIS}Oído: {oido.descripcion}" + (f" | Voz: {voz.nombre}" if voz else " | mudo"))
@@ -3241,6 +3623,7 @@ def arrancar(chat, args, indice_micro: int | None = None, preparar_chat=None) ->
         pass
     finally:
         parar.set()
+        olvidar_agente()
         cerrar = getattr(chat_actual["valor"], "cerrar_sesion", None)
         if cerrar:
             cerrar()

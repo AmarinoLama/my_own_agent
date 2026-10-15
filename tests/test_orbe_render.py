@@ -29,7 +29,9 @@ class OrbeRenderTests(unittest.TestCase):
             captura["ppm"] = data
             return object()
 
-        with patch("voz.tk.PhotoImage", side_effect=capturar):
+        # Se tapa la fábrica de fotos de Tk: así estas pruebas corren sin
+        # `python3-tk` instalado y miden solo el pintado del orbe.
+        with patch("voz._foto_ppm", side_effect=capturar):
             orbe._pintar()
 
         return voz.Image.open(io.BytesIO(captura["ppm"])).convert("RGB")

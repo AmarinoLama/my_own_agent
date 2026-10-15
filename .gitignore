@@ -1,10 +1,10 @@
 .env
 .freebuff/
-cardmarket-angular/node_modules/
-cardmarket-angular/.angular/
-cardmarket-angular/dist/
-cardmarket-import.json
+# marcas de «ya hay un agente/vigilante» que se quedan al morir sin salir
+.agente.pid
+.palmadas.pid
 __pycache__/
+.pytest_cache/
 *.pyc
 *.log
 voz_config.json

@@ -14,7 +14,7 @@ import uuid
 from datetime import date, datetime
 from pathlib import Path
 
-RAIZ = Path(__file__).resolve().parent
+RAIZ = Path(__file__).resolve().parent.parent  # raíz del proyecto (vive en src/)
 ARCHIVO = RAIZ / "calendario.json"
 MESES = (
     "enero", "febrero", "marzo", "abril", "mayo", "junio",
@@ -129,7 +129,12 @@ class WidgetCalendario:
     ACENTO = "#8dc8ff"
 
     def __init__(self, almacen: Calendario | None = None):
-        import tkinter as tk
+        try:
+            import tkinter as tk
+        except ImportError as error:
+            raise RuntimeError(
+                "Falta tkinter: en Ubuntu/Debian instala `sudo apt install python3-tk`"
+            ) from error
 
         self.tk = tk
         self.almacen = almacen or Calendario()
